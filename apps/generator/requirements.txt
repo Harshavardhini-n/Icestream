@@ -1,0 +1,2 @@
+# No application dependencies are required yet for the project foundation.
+# Kafka, Flink, and other pipeline libraries will be added in later commits.
