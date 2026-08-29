@@ -52,9 +52,9 @@ Python Generator
 
 ## Current implementation status
 
-This repository is in Commit 1 of a planned 20-commit implementation roadmap.
+This repository has completed Commit 1 and Commit 2 of the planned implementation roadmap.
 
-Commit 1 establishes the project foundation only:
+Commit 1 — Project foundation — COMPLETE
 - repository structure
 - environment template
 - project README
@@ -62,7 +62,27 @@ Commit 1 establishes the project foundation only:
 - minimal Python package skeleton
 - test documentation
 
-No Kafka, Flink, Iceberg, observability engine, circuit breaker, DLQ logic, recovery flow, or frontend implementation is included in this commit.
+Commit 2 — Kafka streaming infrastructure — COMPLETE
+- local Kafka broker through Docker Compose
+- KRaft-based single-node deployment
+- Kafka topics for checkout and control streams
+- topic initialization script for idempotent local setup
+- local documentation for broker startup and verification
+
+The following components are not yet implemented and remain future work:
+- Python transaction generator
+- Apache Flink
+- Apache Iceberg
+- MinIO
+- Great Expectations
+- custom data-quality engine
+- circuit breaker
+- DLQ processing logic
+- FastAPI
+- React
+- React Flow
+- WebSockets
+- automatic recovery
 
 ## Planned 20-commit development roadmap
 
@@ -99,4 +119,4 @@ Before future implementation milestones, ensure the following are available:
 
 ## Notes
 
-This repository intentionally contains only the initial foundation in Commit 1. Future commits will progressively add each architectural component without skipping the planned sequence.
+This repository currently includes the local Kafka infrastructure foundation for Commit 2. Future commits will progressively add each remaining architectural component without skipping the planned sequence.
