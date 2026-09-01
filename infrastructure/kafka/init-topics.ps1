@@ -5,6 +5,7 @@ $serviceName = "kafka"
 
 $requiredTopics = @(
     @{ Name = "checkout-events"; Partitions = 3; ReplicationFactor = 1 },
+    @{ Name = "processed-checkout-events"; Partitions = 3; ReplicationFactor = 1 },
     @{ Name = "checkout-dlq"; Partitions = 3; ReplicationFactor = 1 },
     @{ Name = "icestream-control"; Partitions = 1; ReplicationFactor = 1 }
 )

@@ -1,0 +1,8 @@
+# Apache Flink Python API
+pyflink==1.18.1
+
+# For serialization (though json is standard library)
+# Already satisfied by core Python
+
+# Note: PyFlink requires Java Runtime Environment (JRE) to be installed
+# and JAVA_HOME environment variable to be set
