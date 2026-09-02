@@ -1,18 +1,22 @@
-version: '3.8'
-
 services:
+
   flink-jobmanager:
-    image: flink:1.18.1-scala_2.12-java11
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: icestream-flink-jobmanager
     hostname: flink-jobmanager
     restart: unless-stopped
+
     ports:
       - "8081:8081"
       - "6123:6123"
+
     environment:
       JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
       JOB_MANAGER_RPC_PORT: 6123
       TASK_MANAGER_NUMBER_OF_TASK_SLOTS: 2
+
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
         jobmanager.rpc.port: 6123
@@ -22,53 +26,70 @@ services:
         state.backend.async: false
         taskmanager.memory.process.size: 1g
         jobmanager.memory.process.size: 1g
+
     networks:
       - icestream-network
+
     volumes:
       - /opt/flink/usrlib
+      - ./lib/flink-connector-kafka-3.0.2-1.18.jar:/opt/flink/lib/flink-connector-kafka-3.0.2-1.18.jar:ro
+
     command: jobmanager
+
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "curl -s http://localhost:8081/overview | grep -q 'Running' || exit 1",
+          "curl -s http://localhost:8081/overview | grep -q 'Running' || exit 1"
         ]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 30s
 
+
   flink-taskmanager:
-    image: flink:1.18.1-scala_2.12-java11
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: icestream-flink-taskmanager
     hostname: flink-taskmanager
     restart: unless-stopped
+
     depends_on:
       - flink-jobmanager
+
     environment:
       JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
       JOB_MANAGER_RPC_PORT: 6123
       TASK_MANAGER_NUMBER_OF_TASK_SLOTS: 2
+
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
         jobmanager.rpc.port: 6123
         taskmanager.numberOfTaskSlots: 2
         taskmanager.memory.process.size: 1g
+
     networks:
       - icestream-network
+
     volumes:
       - /opt/flink/usrlib
+      - ./lib/flink-connector-kafka-3.0.2-1.18.jar:/opt/flink/lib/flink-connector-kafka-3.0.2-1.18.jar:ro
+
     command: taskmanager
+
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "curl -s http://flink-jobmanager:8081/taskmanagers | grep -q 'flink-taskmanager' || exit 1",
+          "curl -s http://flink-jobmanager:8081/taskmanagers | grep -q 'flink-taskmanager' || exit 1"
         ]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 30s
+
 
 networks:
   icestream-network:

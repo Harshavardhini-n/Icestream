@@ -8,11 +8,15 @@ import pytest
 
 from flink.config import FlinkConfig
 from flink.jobs.checkout_processor import (
-    EventDeserializer,
-    EventValidator,
-    EventEnricher,
-    EventSerializer,
+    AMOUNT_TOLERANCE,
     REQUIRED_FIELDS,
+    BusinessEventFilter,
+    EventDeserializer,
+    EventEnricher,
+    EventMetricsCalculator,
+    EventNormalizer,
+    EventSerializer,
+    EventValidator,
 )
 
 
@@ -427,3 +431,227 @@ class TestProcessingPipeline:
         for output in successful_outputs:
             parsed = json.loads(output)
             assert parsed["processed"] is True
+
+# ============================================================================
+# Commit 7 — Stream Processing Operators
+# ============================================================================
+
+
+class TestEventNormalizer:
+    """Tests for numeric normalization."""
+
+    def test_normalize_numeric_fields(self, valid_event):
+        normalizer = EventNormalizer()
+
+        result = normalizer.normalize(valid_event)
+
+        assert isinstance(result["quantity"], float)
+        assert isinstance(result["unit_price"], float)
+        assert isinstance(result["subtotal"], float)
+        assert isinstance(result["total_amount"], float)
+
+    def test_normalize_null_tax(self, valid_event_with_null_tax):
+        normalizer = EventNormalizer()
+
+        result = normalizer.normalize(valid_event_with_null_tax)
+
+        assert result["tax_amount"] == 0.0
+        assert result["tax_was_null"] is True
+
+    def test_normalize_non_null_tax(self, valid_event):
+        normalizer = EventNormalizer()
+
+        result = normalizer.normalize(valid_event)
+
+        assert result["tax_amount"] == 7.50
+        assert result["tax_was_null"] is False
+
+    def test_normalizer_preserves_original_fields(self, valid_event):
+        normalizer = EventNormalizer()
+
+        result = normalizer.normalize(valid_event)
+
+        for field in REQUIRED_FIELDS:
+            assert field in result
+
+
+class TestEventMetricsCalculator:
+    """Tests for transaction metric calculations."""
+
+    def test_calculated_total(self, valid_event):
+        calculator = EventMetricsCalculator()
+
+        result = calculator.calculate(valid_event)
+
+        expected = (
+            valid_event["subtotal"]
+            - valid_event["discount_amount"]
+            + valid_event["shipping_amount"]
+            + valid_event["tax_amount"]
+        )
+
+        assert result["calculated_total_amount"] == round(
+            expected,
+            2,
+        )
+
+    def test_amount_difference(self, valid_event):
+        calculator = EventMetricsCalculator()
+
+        result = calculator.calculate(valid_event)
+
+        expected = (
+            valid_event["total_amount"]
+            - result["calculated_total_amount"]
+        )
+
+        assert result["amount_difference"] == round(
+            expected,
+            2,
+        )
+
+    def test_consistent_total(self, valid_event):
+        calculator = EventMetricsCalculator()
+
+        result = calculator.calculate(valid_event)
+
+        assert result["amount_consistent"] is True
+        assert abs(result["amount_difference"]) <= AMOUNT_TOLERANCE
+
+    def test_detects_inconsistent_total(self, valid_event):
+        event = valid_event.copy()
+
+        event["total_amount"] = 999.99
+
+        calculator = EventMetricsCalculator()
+
+        result = calculator.calculate(event)
+
+        assert result["amount_consistent"] is False
+        assert abs(result["amount_difference"]) > AMOUNT_TOLERANCE
+
+    def test_detects_discount(self, valid_event):
+        calculator = EventMetricsCalculator()
+
+        result = calculator.calculate(valid_event)
+
+        assert result["has_discount"] is True
+
+    def test_detects_no_discount(self, valid_event):
+        event = valid_event.copy()
+        event["discount_amount"] = 0
+
+        calculator = EventMetricsCalculator()
+
+        result = calculator.calculate(event)
+
+        assert result["has_discount"] is False
+
+    def test_null_tax_can_be_calculated(self, valid_event_with_null_tax):
+        normalizer = EventNormalizer()
+        calculator = EventMetricsCalculator()
+
+        normalized = normalizer.normalize(
+            valid_event_with_null_tax
+        )
+
+        result = calculator.calculate(normalized)
+
+        assert result["tax_amount"] == 0.0
+        assert result["calculated_total_amount"] == round(
+            normalized["subtotal"]
+            - normalized["discount_amount"]
+            + normalized["shipping_amount"],
+            2,
+        )
+
+
+class TestBusinessEventFilter:
+    """Tests for business-level event filtering."""
+
+    def test_checkout_event_is_kept(self, valid_event):
+        event_filter = BusinessEventFilter()
+
+        assert event_filter.keep(valid_event) is True
+        assert event_filter.filtered_count == 0
+
+    def test_non_checkout_event_is_filtered(self, valid_event):
+        event = valid_event.copy()
+        event["event_type"] = "page_view"
+
+        event_filter = BusinessEventFilter()
+
+        assert event_filter.keep(event) is False
+        assert event_filter.filtered_count == 1
+
+    def test_none_event_is_filtered(self):
+        event_filter = BusinessEventFilter()
+
+        assert event_filter.keep(None) is False
+        assert event_filter.filtered_count == 1
+
+    def test_filter_preserves_valid_event(self, valid_event):
+        event_filter = BusinessEventFilter()
+
+        result = event_filter.keep(valid_event)
+
+        assert result is True
+
+
+class TestCommit7Pipeline:
+    """Tests the complete Commit 7 transformation flow."""
+
+    def test_full_operator_pipeline(self, valid_event):
+        normalizer = EventNormalizer()
+        calculator = EventMetricsCalculator()
+        enricher = EventEnricher()
+
+        filtered = BusinessEventFilter().keep(valid_event)
+
+        assert filtered is True
+
+        normalized = normalizer.normalize(valid_event)
+        calculated = calculator.calculate(normalized)
+        enriched = enricher.enrich(calculated)
+
+        assert enriched["processed"] is True
+        assert enriched["processing_stage"] == "flink_stream_processor"
+
+        assert "calculated_total_amount" in enriched
+        assert "amount_difference" in enriched
+        assert "amount_consistent" in enriched
+        assert "has_discount" in enriched
+        assert "tax_was_null" in enriched
+        assert "processed_timestamp" in enriched
+
+    def test_full_pipeline_with_null_tax(
+        self,
+        valid_event_with_null_tax,
+    ):
+        normalizer = EventNormalizer()
+        calculator = EventMetricsCalculator()
+        enricher = EventEnricher()
+
+        normalized = normalizer.normalize(
+            valid_event_with_null_tax
+        )
+
+        calculated = calculator.calculate(normalized)
+        enriched = enricher.enrich(calculated)
+
+        assert enriched["tax_was_null"] is True
+        assert enriched["tax_amount"] == 0.0
+        assert enriched["processed"] is True
+
+    def test_full_pipeline_detects_bad_total(self, valid_event):
+        event = valid_event.copy()
+        event["total_amount"] = 1000.00
+
+        normalizer = EventNormalizer()
+        calculator = EventMetricsCalculator()
+
+        normalized = normalizer.normalize(event)
+        calculated = calculator.calculate(normalized)
+
+        assert calculated["amount_consistent"] is False
+        assert calculated["amount_difference"] != 0
