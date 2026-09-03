@@ -1,0 +1,29 @@
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: icestream-minio
+    hostname: minio
+    command: server /data --console-address ":9001"
+
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+    environment:
+      MINIO_ROOT_USER: icestream
+      MINIO_ROOT_PASSWORD: icestream-minio
+
+    volumes:
+      - minio-data:/data
+
+    networks:
+      - icestream-network
+
+    restart: unless-stopped
+
+volumes:
+  minio-data:
+
+networks:
+  icestream-network:
+    external: true
