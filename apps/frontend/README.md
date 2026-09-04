@@ -10,5 +10,4 @@ This frontend consumes the real FastAPI endpoints from the IceStream API service
 4. Open: `http://localhost:5173`
 
 ## Environment
-
 The app reads the API base URL from `VITE_API_BASE_URL`.
