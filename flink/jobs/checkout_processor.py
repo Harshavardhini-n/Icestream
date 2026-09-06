@@ -1,25 +1,21 @@
 """
-Flink job for processing checkout events from Kafka.
+IceStream Flink checkout event processor.
 
-Commit 11 responsibilities:
-1. Consume raw checkout events from Kafka.
-2. Deserialize JSON payloads.
-3. Validate event structure.
-4. Filter malformed and invalid events.
-5. Normalize transaction values.
-6. Calculate derived transaction metrics.
-7. Apply data quality rules.
-8. Add processing metadata.
-9. Serialize processed events.
-10. Publish processed events to Kafka.
+Commit 12:
+- Kafka input/output configuration
+- JSON deserialization
+- Schema validation
+- Business event filtering
+- Event normalization
+- Derived event metrics
+- Data quality validation
+- Processing enrichment
+- Observability metrics
+- JSON serialization
 
-The business transformation and data quality logic are kept
-framework-independent so they can be unit tested without requiring
-a running Flink cluster.
-
-Commit 11 only detects and annotates data quality failures.
-Quarantine, DLQ handling, circuit breaking, and recovery are
-implemented in later commits.
+The Flink-specific imports are intentionally lazy so the module
+can still be imported and unit-tested in the local Windows
+Python environment where PyFlink may not be installed.
 """
 
 from __future__ import annotations
@@ -27,24 +23,15 @@ from __future__ import annotations
 import json
 import logging
 import math
-import sys
+import time
 from datetime import datetime, timezone
 from typing import Any
 
 from flink.config import FlinkConfig
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-
 logger = logging.getLogger(__name__)
 
-
-# ============================================================================
-# Constants
-# ============================================================================
 
 REQUIRED_FIELDS = {
     "event_id",
@@ -86,259 +73,381 @@ MONETARY_FIELDS = {
 }
 
 
-# ============================================================================
-# Event Deserialization
-# ============================================================================
-
-
 class EventDeserializer:
-    """Deserialize JSON strings into dictionaries."""
+    """Deserialize Kafka JSON messages into Python dictionaries."""
 
-    def __init__(self):
-        self.logger = logging.getLogger(__name__)
+    def __init__(self) -> None:
+        # Commit 6/7 public counter.
         self.malformed_count = 0
 
-    def deserialize(self, message: str) -> dict[str, Any] | None:
-        """Deserialize a JSON message."""
+        # Additional success counter.
+        self.success_count = 0
+
+    def deserialize(
+        self,
+        message: str | bytes,
+    ) -> dict[str, Any] | None:
         try:
+            if isinstance(message, bytes):
+                message = message.decode("utf-8")
+
             event = json.loads(message)
 
             if not isinstance(event, dict):
-                self.malformed_count += 1
-
-                self.logger.warning(
-                    "JSON root is not an object | message=%s",
-                    message[:100],
+                raise ValueError(
+                    "JSON payload must be an object"
                 )
 
-                return None
-
+            self.success_count += 1
             return event
 
-        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        except (
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            TypeError,
+            ValueError,
+        ) as exc:
             self.malformed_count += 1
 
-            self.logger.warning(
+            logger.warning(
                 "Malformed JSON (count=%s): %s | message=%s",
                 self.malformed_count,
-                str(exc)[:100],
-                message[:100],
+                exc,
+                message,
             )
 
             return None
 
 
-# ============================================================================
-# Event Validation
-# ============================================================================
-
-
 class EventValidator:
-    """Validate the basic structure and numeric fields of an event."""
+    """Validate that an event contains required checkout fields."""
 
-    def __init__(self):
-        self.logger = logging.getLogger(__name__)
-        self.validation_error_count = 0
+    def __init__(self) -> None:
+        # Commit 6/7 public counters.
         self.validation_success_count = 0
+        self.validation_error_count = 0
+
+        # Descriptive aliases.
+        self.success_count = 0
+        self.failure_count = 0
 
     def validate(
         self,
         event: dict[str, Any] | None,
     ) -> dict[str, Any] | None:
-        """Validate event structure.
+        """
+        Validate an event.
 
-        Extra fields are allowed.
-        tax_amount is allowed to be None.
+        None is treated as an invalid event and returns None
+        instead of raising an exception.
         """
         if event is None:
+            self.validation_error_count += 1
+            self.failure_count += 1
             return None
 
-        try:
-            missing_fields = REQUIRED_FIELDS - set(event.keys())
+        missing_fields = sorted(
+            field
+            for field in REQUIRED_FIELDS
+            if field not in event
+        )
 
-            if missing_fields:
-                self.validation_error_count += 1
-
-                self.logger.warning(
-                    "Missing required fields: %s | event_id=%s",
-                    sorted(missing_fields),
-                    event.get("event_id", "UNKNOWN"),
-                )
-
-                return None
-
-            for field in NUMERIC_FIELDS:
-                value = event.get(field)
-
-                if field == "tax_amount" and value is None:
-                    continue
-
-                float(value)
-
-            self.validation_success_count += 1
-            return event
-
-        except (TypeError, ValueError):
+        if missing_fields:
             self.validation_error_count += 1
+            self.failure_count += 1
 
-            self.logger.warning(
-                "Invalid numeric field type | event_id=%s",
+            logger.warning(
+                "Missing required fields: %s | event_id=%s",
+                missing_fields,
                 event.get("event_id", "UNKNOWN"),
             )
 
             return None
 
-        except Exception as exc:
-            self.validation_error_count += 1
+        for field in NUMERIC_FIELDS:
+            value = event.get(field)
 
-            self.logger.error(
-                "Validation exception: %s",
-                exc,
-                exc_info=True,
-            )
+            if value is None:
+                continue
 
-            return None
+            try:
+                float(value)
+            except (TypeError, ValueError):
+                self.validation_error_count += 1
+                self.failure_count += 1
 
+                logger.warning(
+                    "Invalid numeric field: %s=%r | event_id=%s",
+                    field,
+                    value,
+                    event.get("event_id", "UNKNOWN"),
+                )
 
-# ============================================================================
-# Commit 7 — Stream Processing Operators
-# ============================================================================
+                return None
+
+        self.validation_success_count += 1
+        self.success_count += 1
+
+        return event
 
 
 class EventNormalizer:
-    """Normalize numeric transaction fields."""
-
-    def __init__(self):
-        self.logger = logging.getLogger(__name__)
+    """Normalize event values into consistent types and defaults."""
 
     def normalize(
         self,
         event: dict[str, Any],
     ) -> dict[str, Any]:
-        """Normalize numeric values without removing original fields."""
         normalized = dict(event)
 
-        tax_was_null = normalized.get("tax_amount") is None
-
         for field in NUMERIC_FIELDS:
-            if field == "tax_amount":
-                normalized[field] = (
-                    0.0
-                    if normalized.get(field) is None
-                    else float(normalized[field])
-                )
-            else:
-                normalized[field] = float(normalized[field])
+            value = normalized.get(field)
 
-        normalized["tax_was_null"] = tax_was_null
+            if value is None:
+                continue
+
+            try:
+                numeric_value = float(value)
+
+                # Quantity remains a float for compatibility with
+                # the original Commit 7 implementation/tests.
+                if field == "quantity":
+                    normalized[field] = numeric_value
+                else:
+                    normalized[field] = round(
+                        numeric_value,
+                        2,
+                    )
+
+            except (TypeError, ValueError):
+                # DataQualityChecker handles invalid numeric values.
+                pass
+
+        # Preserve information that the original tax value was null.
+        if normalized.get("tax_amount") is None:
+            normalized["tax_amount"] = 0.0
+            normalized["tax_was_null"] = True
+        else:
+            normalized["tax_was_null"] = False
+
+        currency = normalized.get("currency")
+
+        if isinstance(currency, str):
+            normalized["currency"] = (
+                currency.strip().upper()
+            )
+
+        payment_method = normalized.get(
+            "payment_method"
+        )
+
+        if isinstance(payment_method, str):
+            normalized["payment_method"] = (
+                payment_method.strip()
+            )
+
+        event_type = normalized.get("event_type")
+
+        if isinstance(event_type, str):
+            normalized["event_type"] = (
+                event_type.strip().lower()
+            )
 
         return normalized
 
 
 class EventMetricsCalculator:
-    """Calculate derived transaction metrics."""
-
-    def __init__(self):
-        self.logger = logging.getLogger(__name__)
+    """Calculate derived financial metrics."""
 
     def calculate(
         self,
         event: dict[str, Any],
     ) -> dict[str, Any]:
-        """Calculate transaction-level metrics."""
-        result = dict(event)
+        enriched = dict(event)
 
-        subtotal = float(result["subtotal"])
-        discount = float(result["discount_amount"])
-        shipping = float(result["shipping_amount"])
-        tax = float(result["tax_amount"])
-        supplied_total = float(result["total_amount"])
-
-        calculated_total = (
-            subtotal
-            - discount
-            + shipping
-            + tax
+        quantity = self._to_float(
+            enriched.get("quantity")
         )
 
-        amount_difference = (
-            supplied_total - calculated_total
+        unit_price = self._to_float(
+            enriched.get("unit_price")
         )
 
-        result["calculated_total_amount"] = round(
-            calculated_total,
-            2,
+        subtotal = self._to_float(
+            enriched.get("subtotal")
         )
 
-        result["amount_difference"] = round(
-            amount_difference,
-            2,
+        discount = self._to_float(
+            enriched.get("discount_amount")
         )
 
-        result["amount_consistent"] = (
-            abs(amount_difference) <= AMOUNT_TOLERANCE
+        shipping = self._to_float(
+            enriched.get("shipping_amount")
         )
 
-        result["has_discount"] = discount > 0
+        tax = self._to_float(
+            enriched.get("tax_amount")
+        )
 
-        return result
+        total = self._to_float(
+            enriched.get("total_amount")
+        )
+
+        if (
+            quantity is not None
+            and unit_price is not None
+        ):
+            calculated_subtotal = round(
+                quantity * unit_price,
+                2,
+            )
+        else:
+            calculated_subtotal = None
+
+        if (
+            subtotal is not None
+            and discount is not None
+            and shipping is not None
+            and tax is not None
+        ):
+            calculated_total = round(
+                subtotal
+                - discount
+                + shipping
+                + tax,
+                2,
+            )
+        else:
+            calculated_total = None
+
+        enriched["calculated_subtotal"] = (
+            calculated_subtotal
+        )
+
+        enriched["calculated_total_amount"] = (
+            calculated_total
+        )
+
+        if (
+            total is not None
+            and calculated_total is not None
+        ):
+            difference = round(
+                total - calculated_total,
+                2,
+            )
+
+            enriched["amount_difference"] = (
+                difference
+            )
+
+            enriched["amount_consistent"] = (
+                abs(difference)
+                <= AMOUNT_TOLERANCE
+            )
+
+        else:
+            enriched["amount_difference"] = None
+            enriched["amount_consistent"] = False
+
+        discount_value = discount or 0.0
+
+        enriched["has_discount"] = (
+            discount_value > 0
+        )
+
+        return enriched
+
+    @staticmethod
+    def _to_float(
+        value: Any,
+    ) -> float | None:
+        try:
+            if value is None:
+                return None
+
+            result = float(value)
+
+            if not math.isfinite(result):
+                return None
+
+            return result
+
+        except (TypeError, ValueError):
+            return None
 
 
 class BusinessEventFilter:
-    """Filter events that should not enter the processed stream."""
+    """
+    Keep only supported business checkout events.
 
-    def __init__(self):
-        self.logger = logging.getLogger(__name__)
+    The public counters preserve the Commit 7 API.
+    """
+
+    def __init__(self) -> None:
+        self.accepted_count = 0
+        self.rejected_count = 0
+
+        # Commit 7 public counter.
         self.filtered_count = 0
 
     def keep(
         self,
         event: dict[str, Any] | None,
     ) -> bool:
-        """Return True for usable checkout events."""
+        """
+        Return whether an event is a checkout event.
+
+        This method intentionally updates filtered_count
+        because the original Commit 7 tests use keep()
+        directly.
+        """
         if event is None:
+            self.rejected_count += 1
             self.filtered_count += 1
             return False
 
-        event_type = event.get("event_type")
-
-        if event_type != "checkout":
+        if event.get("event_type") != "checkout":
+            self.rejected_count += 1
             self.filtered_count += 1
-
-            self.logger.warning(
-                "Filtering unsupported event type=%s | event_id=%s",
-                event_type,
-                event.get("event_id", "UNKNOWN"),
-            )
-
             return False
 
+        self.accepted_count += 1
         return True
 
+    def filter(
+        self,
+        event: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """
+        Filter an event while preserving the original event object.
+        """
+        if not self.keep(event):
+            if event is not None:
+                logger.info(
+                    "Business event filtered | event_id=%s | "
+                    "event_type=%s",
+                    event.get(
+                        "event_id",
+                        "UNKNOWN",
+                    ),
+                    event.get("event_type"),
+                )
 
-# ============================================================================
-# Commit 11 — Data Quality Rules
-# ============================================================================
+            return None
+
+        return event
 
 
 class DataQualityChecker:
-    """Apply business-level data quality rules.
+    """
+    Apply event-level data quality rules.
 
-    The checker does not remove, quarantine, or reject the event.
-
-    Instead, it annotates the event with:
-
-        data_quality_checked
-        data_quality_status
-        data_quality_errors
-
-    Failed events remain in the stream so later commits can implement
-    quarantine, DLQ, circuit-breaker, and recovery behavior.
+    Failed events remain in the stream during Commit 11/12.
+    Later commits introduce quarantine and DLQ handling.
     """
 
-    def __init__(self):
-        self.logger = logging.getLogger(__name__)
-
+    def __init__(self) -> None:
         self.checked_count = 0
         self.passed_count = 0
         self.failed_count = 0
@@ -347,155 +456,226 @@ class DataQualityChecker:
         self,
         event: dict[str, Any],
     ) -> dict[str, Any]:
-        """Run all data quality rules against an event."""
-        result = dict(event)
+        self.checked_count += 1
 
         errors: list[str] = []
 
-        self._check_identity_fields(result, errors)
-        self._check_quantity(result, errors)
-        self._check_monetary_values(result, errors)
-        self._check_discount(result, errors)
-        self._check_subtotal(result, errors)
-        self._check_tax(result, errors)
-        self._check_total_consistency(result, errors)
-        self._check_currency(result, errors)
-        self._check_payment_method(result, errors)
-        self._check_event_type(result, errors)
+        self._check_identity_fields(
+            event,
+            errors,
+        )
 
-        self.checked_count += 1
+        self._check_quantity(
+            event,
+            errors,
+        )
+
+        self._check_monetary_values(
+            event,
+            errors,
+        )
+
+        self._check_discount(
+            event,
+            errors,
+        )
+
+        self._check_subtotal(
+            event,
+            errors,
+        )
+
+        self._check_tax(
+            event,
+            errors,
+        )
+
+        self._check_total_consistency(
+            event,
+            errors,
+        )
+
+        self._check_currency(
+            event,
+            errors,
+        )
+
+        self._check_payment_method(
+            event,
+            errors,
+        )
+
+        self._check_event_type(
+            event,
+            errors,
+        )
+
+        result = dict(event)
+
+        result["data_quality_checked"] = True
+        result["data_quality_errors"] = errors
 
         if errors:
             self.failed_count += 1
-            status = "failed"
 
-            self.logger.warning(
+            result["data_quality_status"] = (
+                "failed"
+            )
+
+            logger.warning(
                 "Data quality failure | event_id=%s | errors=%s",
-                result.get("event_id", "UNKNOWN"),
+                event.get(
+                    "event_id",
+                    "UNKNOWN",
+                ),
                 errors,
             )
 
         else:
             self.passed_count += 1
-            status = "passed"
 
-        result["data_quality_checked"] = True
-        result["data_quality_status"] = status
-        result["data_quality_errors"] = errors
+            result["data_quality_status"] = (
+                "passed"
+            )
 
         return result
 
+    @staticmethod
     def _check_identity_fields(
-        self,
         event: dict[str, Any],
         errors: list[str],
     ) -> None:
-        """Check transaction identity fields."""
-        for field, error_code in (
-            ("event_id", "event_id_missing"),
-            ("customer_id", "customer_id_missing"),
-            ("session_id", "session_id_missing"),
-            ("product_id", "product_id_missing"),
-        ):
+        identity_fields = (
+            "event_id",
+            "customer_id",
+            "session_id",
+            "product_id",
+        )
+
+        for field in identity_fields:
             value = event.get(field)
 
-            if value is None:
-                errors.append(error_code)
-                continue
+            if (
+                not isinstance(value, str)
+                or not value.strip()
+            ):
+                errors.append(
+                    f"{field}_missing"
+                )
 
-            if isinstance(value, str) and not value.strip():
-                errors.append(error_code)
-
+    @staticmethod
     def _check_quantity(
-        self,
         event: dict[str, Any],
         errors: list[str],
     ) -> None:
-        """Quantity must be a positive whole number."""
-        quantity = event.get("quantity")
+        quantity = (
+            DataQualityChecker._to_float(
+                event.get("quantity")
+            )
+        )
 
-        try:
-            numeric_quantity = float(quantity)
+        if quantity is None:
+            errors.append(
+                "quantity_invalid"
+            )
+            return
 
-            if not math.isfinite(numeric_quantity):
-                errors.append("quantity_must_be_finite")
-                return
+        if not math.isfinite(quantity):
+            errors.append(
+                "quantity_not_finite"
+            )
+            return
 
-            if numeric_quantity <= 0:
-                errors.append("quantity_must_be_positive")
+        if quantity <= 0:
+            errors.append(
+                "quantity_must_be_positive"
+            )
 
-            if not numeric_quantity.is_integer():
-                errors.append("quantity_must_be_integer")
+        if not quantity.is_integer():
+            errors.append(
+                "quantity_must_be_integer"
+            )
 
-        except (TypeError, ValueError):
-            errors.append("quantity_must_be_numeric")
-
+    @staticmethod
     def _check_monetary_values(
-        self,
         event: dict[str, Any],
         errors: list[str],
     ) -> None:
-        """Monetary values must be numeric, finite, and non-negative."""
         for field in MONETARY_FIELDS:
             value = event.get(field)
 
-            try:
-                numeric_value = float(value)
+            numeric_value = (
+                DataQualityChecker._to_float(
+                    value
+                )
+            )
 
-                if not math.isfinite(numeric_value):
-                    errors.append(
-                        f"{field}_must_be_finite"
-                    )
-                    continue
-
-                if numeric_value < 0:
-                    errors.append(
-                        f"{field}_must_be_non_negative"
-                    )
-
-            except (TypeError, ValueError):
+            if numeric_value is None:
                 errors.append(
-                    f"{field}_must_be_numeric"
+                    f"{field}_invalid"
+                )
+                continue
+
+            if not math.isfinite(numeric_value):
+                errors.append(
+                    f"{field}_not_finite"
+                )
+                continue
+
+            if numeric_value < 0:
+                errors.append(
+                    f"{field}_must_be_non_negative"
                 )
 
+    @staticmethod
     def _check_discount(
-        self,
         event: dict[str, Any],
         errors: list[str],
     ) -> None:
-        """Discount cannot exceed subtotal."""
-        subtotal = self._to_float(
-            event.get("subtotal")
+        subtotal = (
+            DataQualityChecker._to_float(
+                event.get("subtotal")
+            )
         )
 
-        discount = self._to_float(
-            event.get("discount_amount")
+        discount = (
+            DataQualityChecker._to_float(
+                event.get("discount_amount")
+            )
         )
 
         if subtotal is None or discount is None:
             return
 
-        if discount > subtotal + AMOUNT_TOLERANCE:
+        if (
+            discount
+            > subtotal + AMOUNT_TOLERANCE
+        ):
             errors.append(
                 "discount_exceeds_subtotal"
             )
 
+    @staticmethod
     def _check_subtotal(
-        self,
         event: dict[str, Any],
         errors: list[str],
     ) -> None:
-        """Subtotal should equal quantity multiplied by unit price."""
-        quantity = self._to_float(
-            event.get("quantity")
+        quantity = (
+            DataQualityChecker._to_float(
+                event.get("quantity")
+            )
         )
 
-        unit_price = self._to_float(
-            event.get("unit_price")
+        unit_price = (
+            DataQualityChecker._to_float(
+                event.get("unit_price")
+            )
         )
 
-        subtotal = self._to_float(
-            event.get("subtotal")
+        subtotal = (
+            DataQualityChecker._to_float(
+                event.get("subtotal")
+            )
         )
 
         if (
@@ -505,113 +685,158 @@ class DataQualityChecker:
         ):
             return
 
-        calculated_subtotal = quantity * unit_price
+        calculated_subtotal = round(
+            quantity * unit_price,
+            2,
+        )
 
         if (
-            abs(subtotal - calculated_subtotal)
+            abs(
+                subtotal
+                - calculated_subtotal
+            )
             > AMOUNT_TOLERANCE
         ):
             errors.append(
                 "subtotal_inconsistent"
             )
 
+    @staticmethod
     def _check_tax(
-        self,
         event: dict[str, Any],
         errors: list[str],
     ) -> None:
-        """Tax must be numeric after normalization.
-
-        A source null tax is valid because EventNormalizer converts it
-        to 0.0 and records tax_was_null=True.
-        """
-        tax = self._to_float(
-            event.get("tax_amount")
+        tax = (
+            DataQualityChecker._to_float(
+                event.get("tax_amount")
+            )
         )
 
         if tax is None:
             errors.append(
                 "tax_amount_invalid"
             )
+            return
 
+        if not math.isfinite(tax):
+            errors.append(
+                "tax_amount_not_finite"
+            )
+            return
+
+        if tax < 0:
+            errors.append(
+                "tax_amount_must_be_non_negative"
+            )
+
+    @staticmethod
     def _check_total_consistency(
-        self,
-        event: dict,
+        event: dict[str, Any],
         errors: list[str],
     ) -> None:
-        # If tax was originally null, the source event did not provide
-        # enough information to independently validate the final total.
-        # The normalizer has already converted tax_amount to 0.0.
+        # When tax was originally null, the source event did
+        # not provide enough information to independently verify
+        # whether the supplied total included a calculated tax.
         if event.get("tax_was_null") is True:
             return
 
-        subtotal = self._to_float(event.get("subtotal"))
-        discount = self._to_float(event.get("discount_amount"))
-        shipping = self._to_float(event.get("shipping_amount"))
-        tax = self._to_float(event.get("tax_amount"))
-        total = self._to_float(event.get("total_amount"))
+        subtotal = (
+            DataQualityChecker._to_float(
+                event.get("subtotal")
+            )
+        )
 
-        if None in (subtotal, discount, shipping, tax, total):
-            errors.append("total_amount_invalid")
+        discount = (
+            DataQualityChecker._to_float(
+                event.get("discount_amount")
+            )
+        )
+
+        shipping = (
+            DataQualityChecker._to_float(
+                event.get("shipping_amount")
+            )
+        )
+
+        tax = (
+            DataQualityChecker._to_float(
+                event.get("tax_amount")
+            )
+        )
+
+        total = (
+            DataQualityChecker._to_float(
+                event.get("total_amount")
+            )
+        )
+
+        if None in (
+            subtotal,
+            discount,
+            shipping,
+            tax,
+            total,
+        ):
+            errors.append(
+                "total_amount_invalid"
+            )
             return
 
         calculated_total = round(
-            subtotal - discount + shipping + tax,
+            subtotal
+            - discount
+            + shipping
+            + tax,
             2,
         )
 
-        difference = abs(total - calculated_total)
+        difference = abs(
+            total - calculated_total
+        )
 
         if difference > AMOUNT_TOLERANCE:
-            errors.append("total_amount_inconsistent")
+            errors.append(
+                "total_amount_inconsistent"
+            )
 
+    @staticmethod
     def _check_currency(
-        self,
         event: dict[str, Any],
         errors: list[str],
     ) -> None:
-        """Currency must be a non-empty three-letter code."""
         currency = event.get("currency")
 
-        if not isinstance(currency, str):
-            errors.append("currency_invalid")
-            return
-
-        normalized_currency = currency.strip()
-
         if (
-            len(normalized_currency) != 3
-            or not normalized_currency.isalpha()
+            not isinstance(currency, str)
+            or len(currency.strip()) != 3
+            or not currency.strip().isalpha()
         ):
-            errors.append("currency_invalid")
+            errors.append(
+                "currency_invalid"
+            )
 
+    @staticmethod
     def _check_payment_method(
-        self,
         event: dict[str, Any],
         errors: list[str],
     ) -> None:
-        """Payment method must be a non-empty string."""
         payment_method = event.get(
             "payment_method"
         )
 
-        if not isinstance(payment_method, str):
-            errors.append(
-                "payment_method_invalid"
-            )
-            return
-
-        if not payment_method.strip():
+        if (
+            not isinstance(payment_method, str)
+            or not payment_method.strip()
+        ):
             errors.append(
                 "payment_method_invalid"
             )
 
+    @staticmethod
     def _check_event_type(
-        self,
         event: dict[str, Any],
         errors: list[str],
     ) -> None:
-        """Only checkout events are valid for this processing pipeline."""
         if event.get("event_type") != "checkout":
             errors.append(
                 "event_type_invalid"
@@ -621,395 +846,518 @@ class DataQualityChecker:
     def _to_float(
         value: Any,
     ) -> float | None:
-        """Safely convert a value to a finite float."""
         try:
-            converted = float(value)
-
-            if not math.isfinite(converted):
+            if value is None:
                 return None
 
-            return converted
+            result = float(value)
+
+            if not math.isfinite(result):
+                return None
+
+            return result
 
         except (TypeError, ValueError):
             return None
 
 
-# ============================================================================
-# Event Enrichment
-# ============================================================================
+class ObservabilityEngine:
+    """
+    Track pipeline-level observability metrics.
+
+    Commit 12 observes the pipeline but does not stop or
+    pause it. Circuit-breaker behavior is introduced in
+    Commit 13.
+    """
+
+    def __init__(
+        self,
+        max_recent_failures: int = 10,
+    ) -> None:
+        if max_recent_failures < 1:
+            raise ValueError(
+                "max_recent_failures must be at least 1"
+            )
+
+        self.max_recent_failures = (
+            max_recent_failures
+        )
+
+        self.total_events = 0
+        self.processed_events = 0
+        self.quality_passed = 0
+        self.quality_failed = 0
+        self.validation_failed = 0
+        self.deserialization_failed = 0
+
+        self.total_processing_time_ms = 0.0
+
+        self.recent_failures: list[
+            dict[str, Any]
+        ] = []
+
+    def record_event(
+        self,
+        event: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Record observability for a processed event."""
+
+        self.total_events += 1
+        self.processed_events += 1
+
+        quality_status = event.get(
+            "data_quality_status",
+            "unknown",
+        )
+
+        if quality_status == "passed":
+            self.quality_passed += 1
+
+        elif quality_status == "failed":
+            self.quality_failed += 1
+            self._record_failure(event)
+
+        processing_time = event.get(
+            "processing_time_ms"
+        )
+
+        if processing_time is not None:
+            try:
+                processing_time_value = float(
+                    processing_time
+                )
+
+                if math.isfinite(
+                    processing_time_value
+                ):
+                    self.total_processing_time_ms += (
+                        processing_time_value
+                    )
+
+            except (TypeError, ValueError):
+                pass
+
+        result = dict(event)
+
+        result["observability_recorded"] = True
+
+        result["pipeline_status"] = (
+            self.get_pipeline_status()
+        )
+
+        return result
+
+    def record_validation_failure(
+        self,
+        event: dict[str, Any] | None = None,
+    ) -> None:
+        """Record an event rejected by validation."""
+
+        self.total_events += 1
+        self.validation_failed += 1
+
+        if event is not None:
+            self._record_failure(
+                event,
+                failure_type="validation",
+            )
+
+    def record_deserialization_failure(
+        self,
+        event: dict[str, Any] | None = None,
+    ) -> None:
+        """Record an event rejected during deserialization."""
+
+        self.total_events += 1
+        self.deserialization_failed += 1
+
+        if event is not None:
+            self._record_failure(
+                event,
+                failure_type="deserialization",
+            )
+
+    def _record_failure(
+        self,
+        event: dict[str, Any],
+        failure_type: str = "data_quality",
+    ) -> None:
+        failure = {
+            "event_id": event.get(
+                "event_id",
+                "UNKNOWN",
+            ),
+            "failure_type": failure_type,
+            "errors": list(
+                event.get(
+                    "data_quality_errors",
+                    [],
+                )
+            ),
+        }
+
+        self.recent_failures.append(
+            failure
+        )
+
+        if (
+            len(self.recent_failures)
+            > self.max_recent_failures
+        ):
+            self.recent_failures.pop(0)
+
+    def quality_pass_rate(self) -> float:
+        """Return DQ pass percentage."""
+
+        if self.processed_events == 0:
+            return 0.0
+
+        return round(
+            (
+                self.quality_passed
+                / self.processed_events
+            )
+            * 100,
+            2,
+        )
+
+    def quality_failure_rate(self) -> float:
+        """Return DQ failure percentage."""
+
+        if self.processed_events == 0:
+            return 0.0
+
+        return round(
+            (
+                self.quality_failed
+                / self.processed_events
+            )
+            * 100,
+            2,
+        )
+
+    def average_processing_time_ms(self) -> float:
+        """Return average processing time."""
+
+        if self.processed_events == 0:
+            return 0.0
+
+        return round(
+            self.total_processing_time_ms
+            / self.processed_events,
+            2,
+        )
+
+    def get_pipeline_status(self) -> str:
+        """
+        Return current pipeline health.
+
+        Commit 12 only observes the pipeline.
+        """
+
+        if self.quality_failed > 0:
+            return "degraded"
+
+        return "healthy"
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return the current observability state."""
+
+        return {
+            "total_events": self.total_events,
+            "processed_events": self.processed_events,
+            "quality_passed": self.quality_passed,
+            "quality_failed": self.quality_failed,
+            "validation_failed": (
+                self.validation_failed
+            ),
+            "deserialization_failed": (
+                self.deserialization_failed
+            ),
+            "quality_pass_rate": (
+                self.quality_pass_rate()
+            ),
+            "quality_failure_rate": (
+                self.quality_failure_rate()
+            ),
+            "average_processing_time_ms": (
+                self.average_processing_time_ms()
+            ),
+            "pipeline_status": (
+                self.get_pipeline_status()
+            ),
+            "recent_failures": list(
+                self.recent_failures
+            ),
+        }
 
 
 class EventEnricher:
-    """Add processing metadata to a processed event."""
-
-    def __init__(self):
-        self.logger = logging.getLogger(__name__)
+    """Add processing metadata to events."""
 
     def enrich(
         self,
         event: dict[str, Any],
     ) -> dict[str, Any]:
-        """Add processing metadata."""
-        result = dict(event)
+        start_time = time.perf_counter()
 
-        result["processed"] = True
-        result["processing_stage"] = (
+        enriched = dict(event)
+
+        enriched["processed"] = True
+
+        # Preserve Commit 7 public behavior.
+        enriched["processing_stage"] = (
             "flink_stream_processor"
         )
 
-        result["processed_timestamp"] = (
+        enriched["processed_timestamp"] = (
             datetime.now(
                 timezone.utc
             ).isoformat()
         )
 
-        return result
+        enriched["processing_time_ms"] = round(
+            (
+                time.perf_counter()
+                - start_time
+            )
+            * 1000,
+            3,
+        )
 
-
-# ============================================================================
-# Event Serialization
-# ============================================================================
+        return enriched
 
 
 class EventSerializer:
     """Serialize processed events to compact JSON."""
 
-    def __init__(self):
-        self.logger = logging.getLogger(__name__)
-
     def serialize(
         self,
         event: dict[str, Any],
     ) -> str:
-        """Serialize event dictionary to JSON."""
-        try:
-            return json.dumps(
-                event,
-                separators=(",", ":"),
+        return json.dumps(
+            event,
+            separators=(",", ":"),
+            default=str,
+        )
+
+
+class DataQualityCheckerAdapter:
+    """Adapter for applying DataQualityChecker."""
+
+    def __init__(self) -> None:
+        self.checker = DataQualityChecker()
+
+    def process(
+        self,
+        event: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.checker.check(event)
+
+
+class ObservabilityEngineAdapter:
+    """Adapter for applying ObservabilityEngine."""
+
+    def __init__(self) -> None:
+        self.engine = ObservabilityEngine()
+
+    def process(
+        self,
+        event: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.engine.record_event(event)
+
+
+def _get_flink_adapters() -> tuple[
+    Any,
+    Any,
+    Any,
+    Any,
+]:
+    """
+    Lazily import PyFlink adapters.
+
+    This prevents local unit tests from requiring PyFlink.
+    """
+
+    from pyflink.common import SimpleStringSchema
+
+    from pyflink.datastream import (
+        StreamExecutionEnvironment,
+    )
+
+    from pyflink.datastream.connectors.kafka import (
+        FlinkKafkaConsumer,
+        FlinkKafkaProducer,
+    )
+
+    return (
+        StreamExecutionEnvironment,
+        SimpleStringSchema,
+        FlinkKafkaConsumer,
+        FlinkKafkaProducer,
+    )
+
+
+def run_checkout_processor() -> None:
+    """
+    Build and execute the Flink checkout pipeline.
+
+    Pipeline:
+
+        Deserialize
+        -> Validate
+        -> Business Filter
+        -> Normalize
+        -> Metrics
+        -> Data Quality
+        -> Enrich
+        -> Observability
+        -> Serialize
+    """
+
+    (
+        StreamExecutionEnvironment,
+        SimpleStringSchema,
+        FlinkKafkaConsumer,
+        FlinkKafkaProducer,
+    ) = _get_flink_adapters()
+
+    config = FlinkConfig.from_env()
+
+    env = (
+        StreamExecutionEnvironment
+        .get_execution_environment()
+    )
+
+    env.set_parallelism(
+        config.parallelism
+    )
+
+    consumer_properties = {
+        "bootstrap.servers": (
+            config.kafka_bootstrap_servers
+        ),
+        "group.id": config.kafka_group_id,
+        "auto.offset.reset": "earliest",
+    }
+
+    producer_properties = {
+        "bootstrap.servers": (
+            config.kafka_bootstrap_servers
+        ),
+    }
+
+    consumer = FlinkKafkaConsumer(
+        config.input_topic,
+        SimpleStringSchema(),
+        consumer_properties,
+    )
+
+    producer = FlinkKafkaProducer(
+        config.output_topic,
+        SimpleStringSchema(),
+        producer_properties,
+    )
+
+    stream = env.add_source(
+        consumer
+    ).name("kafka-source")
+
+    deserializer = EventDeserializer()
+    validator = EventValidator()
+    business_filter = BusinessEventFilter()
+    normalizer = EventNormalizer()
+    metrics_calculator = EventMetricsCalculator()
+    quality_checker = DataQualityChecker()
+    enricher = EventEnricher()
+    observability = ObservabilityEngine()
+    serializer = EventSerializer()
+
+    def process_message(
+        message: str,
+    ) -> str | None:
+        # 1. Deserialize
+        event = deserializer.deserialize(
+            message
+        )
+
+        if event is None:
+            observability.record_deserialization_failure()
+            return None
+
+        # 2. Validate
+        validated = validator.validate(
+            event
+        )
+
+        if validated is None:
+            observability.record_validation_failure(
+                event
             )
+            return None
 
-        except (TypeError, ValueError) as exc:
-            self.logger.error(
-                "Serialization error: %s | event=%s",
-                exc,
-                event,
-                exc_info=True,
-            )
-
-            return json.dumps(
-                {
-                    "error": "serialization_failed",
-                    "event_id": event.get(
-                        "event_id",
-                        "UNKNOWN",
-                    ),
-                }
-            )
-
-
-# ============================================================================
-# Flink-Specific Adapters
-# ============================================================================
-
-
-def _get_flink_adapters():
-    """Create PyFlink adapters only when PyFlink is available."""
-    try:
-        from pyflink.datastream.functions import (
-            FilterFunction,
-            MapFunction,
+        # 3. Business filter
+        filtered = business_filter.filter(
+            validated
         )
 
-        class EventDeserializerAdapter(MapFunction):
-            def __init__(self):
-                self.deserializer = EventDeserializer()
+        if filtered is None:
+            return None
 
-            def map(self, message: str):
-                return self.deserializer.deserialize(
-                    message
-                )
-
-        class EventValidatorAdapter(MapFunction):
-            def __init__(self):
-                self.validator = EventValidator()
-
-            def map(self, event):
-                return self.validator.validate(
-                    event
-                )
-
-        class BusinessEventFilterAdapter(FilterFunction):
-            def __init__(self):
-                self.event_filter = BusinessEventFilter()
-
-            def filter(self, event):
-                return self.event_filter.keep(
-                    event
-                )
-
-        class EventNormalizerAdapter(MapFunction):
-            def __init__(self):
-                self.normalizer = EventNormalizer()
-
-            def map(self, event):
-                return self.normalizer.normalize(
-                    event
-                )
-
-        class EventMetricsCalculatorAdapter(MapFunction):
-            def __init__(self):
-                self.calculator = (
-                    EventMetricsCalculator()
-                )
-
-            def map(self, event):
-                return self.calculator.calculate(
-                    event
-                )
-
-        class DataQualityCheckerAdapter(MapFunction):
-            def __init__(self):
-                self.checker = DataQualityChecker()
-
-            def map(self, event):
-                return self.checker.check(event)
-
-        class EventEnricherAdapter(MapFunction):
-            def __init__(self):
-                self.enricher = EventEnricher()
-
-            def map(self, event):
-                return self.enricher.enrich(
-                    event
-                )
-
-        class EventSerializerAdapter(MapFunction):
-            def __init__(self):
-                self.serializer = EventSerializer()
-
-            def map(self, event):
-                return self.serializer.serialize(
-                    event
-                )
-
-        return {
-            "deserializer": EventDeserializerAdapter,
-            "validator": EventValidatorAdapter,
-            "filter": BusinessEventFilterAdapter,
-            "normalizer": EventNormalizerAdapter,
-            "metrics": EventMetricsCalculatorAdapter,
-            "quality": DataQualityCheckerAdapter,
-            "enricher": EventEnricherAdapter,
-            "serializer": EventSerializerAdapter,
-        }
-
-    except ImportError:
-        return None
-
-
-# ============================================================================
-# Main Flink Job
-# ============================================================================
-
-
-def run_checkout_processor(
-    config: FlinkConfig,
-) -> int:
-    """Run the Flink checkout event processing job."""
-    try:
-        adapters = _get_flink_adapters()
-
-        if not adapters:
-            logger.error(
-                "PyFlink is not installed. "
-                "Install it with: pip install -r flink/requirements.txt"
-            )
-            return 1
-
-        from pyflink.common import SimpleStringSchema
-        from pyflink.datastream import (
-            StreamExecutionEnvironment,
-        )
-        from pyflink.datastream.connectors.kafka import (
-            FlinkKafkaConsumer,
-            FlinkKafkaProducer,
+        # 4. Normalize
+        normalized = normalizer.normalize(
+            filtered
         )
 
-        logger.info(
-            "Starting %s",
-            config.flink_job_name,
-        )
-
-        logger.info(
-            "Kafka bootstrap servers: %s",
-            config.kafka_bootstrap_servers,
-        )
-
-        logger.info(
-            "Input topic: %s",
-            config.kafka_input_topic,
-        )
-
-        logger.info(
-            "Output topic: %s",
-            config.kafka_output_topic,
-        )
-
-        logger.info(
-            "Parallelism: %s",
-            config.flink_parallelism,
-        )
-
-        # ------------------------------------------------------------------
-        # Flink execution environment
-        # ------------------------------------------------------------------
-
-        env = (
-            StreamExecutionEnvironment
-            .get_execution_environment()
-        )
-
-        env.set_parallelism(
-            config.flink_parallelism
-        )
-
-        # ------------------------------------------------------------------
-        # Kafka consumer
-        # ------------------------------------------------------------------
-
-        kafka_consumer = FlinkKafkaConsumer(
-            topics=config.kafka_input_topic,
-            deserialization_schema=SimpleStringSchema(),
-            properties={
-                "bootstrap.servers": (
-                    config.kafka_bootstrap_servers
-                ),
-                "group.id": (
-                    config.kafka_consumer_group
-                ),
-                "auto.offset.reset": "earliest",
-            },
-        )
-
-        # ------------------------------------------------------------------
-        # Kafka producer
-        # ------------------------------------------------------------------
-
-        kafka_producer = FlinkKafkaProducer(
-            topic=config.kafka_output_topic,
-            serialization_schema=SimpleStringSchema(),
-            producer_config={
-                "bootstrap.servers": (
-                    config.kafka_bootstrap_servers
-                ),
-            },
-        )
-
-        # ------------------------------------------------------------------
-        # Source
-        # ------------------------------------------------------------------
-
-        kafka_stream = env.add_source(
-            kafka_consumer
-        )
-
-        # ------------------------------------------------------------------
-        # Commit 11 processing pipeline
-        # ------------------------------------------------------------------
-
-        processed_stream = (
-            kafka_stream
-
-            # Operator 1: JSON deserialization
-            .map(
-                adapters["deserializer"]()
-            )
-
-            # Operator 2: schema/type validation
-            .map(
-                adapters["validator"]()
-            )
-
-            # Operator 3: remove malformed/
-            # unsupported event types
-            .filter(
-                adapters["filter"]()
-            )
-
-            # Operator 4: normalize numeric values
-            .map(
-                adapters["normalizer"]()
-            )
-
-            # Operator 5: calculate derived metrics
-            .map(
-                adapters["metrics"]()
-            )
-
-            # Operator 6: apply data quality rules
-            .map(
-                adapters["quality"]()
-            )
-
-            # Operator 7: add processing metadata
-            .map(
-                adapters["enricher"]()
-            )
-
-            # Operator 8: serialize output JSON
-            .map(
-                adapters["serializer"]()
+        # 5. Calculate derived metrics
+        calculated = (
+            metrics_calculator.calculate(
+                normalized
             )
         )
 
-        # ------------------------------------------------------------------
-        # Sink
-        # ------------------------------------------------------------------
-
-        processed_stream.add_sink(
-            kafka_producer
+        # 6. Data quality
+        quality_checked = (
+            quality_checker.check(
+                calculated
+            )
         )
 
-        logger.info(
-            "Executing Flink job: %s",
-            config.flink_job_name,
+        # 7. Enrich
+        enriched = enricher.enrich(
+            quality_checked
         )
 
-        env.execute(
-            config.flink_job_name
+        # 8. Observability
+        observed = observability.record_event(
+            enriched
         )
 
-        return 0
-
-    except ImportError as exc:
-        logger.error(
-            "Required module not found: %s",
-            exc,
-            exc_info=True,
+        # 9. Serialize
+        return serializer.serialize(
+            observed
         )
 
-        logger.error(
-            "Ensure PyFlink is installed with: "
-            "pip install -r flink/requirements.txt"
+    processed_stream = (
+        stream
+        .map(process_message)
+        .filter(
+            lambda value: value is not None
         )
-
-        return 1
-
-    except Exception as exc:
-        logger.error(
-            "Job failed with exception: %s",
-            exc,
-            exc_info=True,
+        .name(
+            "checkout-processing-pipeline"
         )
+    )
 
-        return 1
+    processed_stream.add_sink(
+        producer
+    ).name("kafka-output")
+
+    env.execute(
+        config.job_name
+    )
 
 
 if __name__ == "__main__":
-    config = FlinkConfig.from_env()
-
-    exit_code = run_checkout_processor(
-        config
-    )
-
-    sys.exit(exit_code)
+    run_checkout_processor()
