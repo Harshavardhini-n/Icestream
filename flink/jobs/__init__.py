@@ -10,3 +10,8 @@ __all__ = [
     "CircuitBreakerConfig",
     "CircuitState",
 ]
+from .quarantine import (
+    DLQSerializer,
+    EventQuarantine,
+    QuarantineConfig,
+)
