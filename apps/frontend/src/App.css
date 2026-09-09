@@ -1,70 +1,829 @@
+/* ============================================================
+   IceStream — Application Styles
+   Real-Time Lakehouse Observability Platform
+   ============================================================ */
+
+
+/* ============================================================
+   1. Design Tokens
+   ============================================================ */
+
+:root {
+  /* Backgrounds */
+  --bg-primary: #08111b;
+  --bg-secondary: #0b1624;
+  --bg-panel: rgba(15, 23, 42, 0.86);
+  --bg-panel-solid: #0f172a;
+  --bg-elevated: rgba(18, 30, 45, 0.92);
+  --bg-table: rgba(6, 12, 20, 0.62);
+
+  /* Borders */
+  --border-subtle: rgba(148, 163, 184, 0.14);
+  --border-default: rgba(148, 163, 184, 0.22);
+  --border-strong: rgba(148, 163, 184, 0.32);
+
+  /* Text */
+  --text-primary: #e5edf8;
+  --text-secondary: #b4c2d6;
+  --text-muted: #94a3b8;
+  --text-dim: #64748b;
+
+  /* Accent */
+  --accent-blue: #60a5fa;
+  --accent-cyan: #7dd3fc;
+  --accent-blue-soft: rgba(59, 130, 246, 0.08);
+
+  /* Status */
+  --success: #86efac;
+  --success-bg: rgba(34, 197, 94, 0.12);
+  --success-border: rgba(34, 197, 94, 0.35);
+
+  --danger: #fca5a5;
+  --danger-bg: rgba(239, 68, 68, 0.12);
+  --danger-border: rgba(239, 68, 68, 0.35);
+
+  --warning: #fcd34d;
+  --warning-bg: rgba(245, 158, 11, 0.12);
+  --warning-border: rgba(245, 158, 11, 0.35);
+
+  --neutral: #dbeafe;
+  --neutral-bg: rgba(148, 163, 184, 0.12);
+  --neutral-border: rgba(148, 163, 184, 0.26);
+
+  /* Radius */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
+
+  /* Shadows */
+  --shadow-panel: 0 10px 30px rgba(2, 6, 23, 0.28);
+  --shadow-elevated: 0 18px 45px rgba(2, 6, 23, 0.35);
+}
+
+
+/* ============================================================
+   2. Global Reset
+   ============================================================ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-width: 0;
+  min-height: 100%;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  min-height: 100vh;
+  font-family: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--text-primary);
+  background:
+    radial-gradient(
+      circle at 50% -10%,
+      rgba(52, 95, 143, 0.20),
+      transparent 34%
+    ),
+    var(--bg-primary);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+
+/* ============================================================
+   3. Application Shell
+   ============================================================ */
+
+.app-shell {
+  width: min(1400px, 100%);
+  margin: 0 auto;
+  padding: 28px;
+}
+
+
+/* ============================================================
+   4. Header
+   ============================================================ */
+
+.topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+
+  padding: 24px 26px;
+
+  background: rgba(17, 24, 39, 0.88);
+
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+
+  box-shadow: var(--shadow-panel);
+
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+h1 {
+  margin: 0;
+
+  color: #f1f5f9;
+
+  font-size: clamp(2rem, 3vw, 2.5rem);
+  font-weight: 750;
+  line-height: 1.1;
+  letter-spacing: -0.045em;
+}
+
+.subtitle {
+  margin: 9px 0 4px;
+
+  color: #dbeafe;
+
+  font-size: 1.05rem;
+  font-weight: 500;
+}
+
+.meta-line {
+  margin: 0;
+
+  color: var(--text-muted);
+
+  font-size: 0.84rem;
+}
+
+.header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.meta-card {
+  display: flex;
+  min-width: 120px;
+  flex-direction: column;
+  gap: 4px;
+
+  padding: 10px 13px;
+
+  background: rgba(15, 23, 42, 0.90);
+
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+}
+
+.meta-label {
+  color: var(--accent-cyan);
+
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+
+/* ============================================================
+   5. Connection Status
+   ============================================================ */
+
+.connection-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  padding: 6px 10px;
+
+  border-radius: var(--radius-pill);
+
+  font-size: 0.72rem;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.connection-pill.connected {
+  color: var(--success);
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+}
+
+.connection-pill.disconnected {
+  color: var(--danger);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+}
+
+
+/* ============================================================
+   6. System Status Banner
+   ============================================================ */
+
 .system-status-bar {
-  margin-top: 18px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 16px 20px;
-  border: 1px solid rgba(96, 165, 250, 0.2);
-  border-radius: 14px;
-  background: rgba(15, 23, 42, 0.72);
+  gap: 18px;
+
+  margin-top: 18px;
+  padding: 17px 20px;
+
+  background:
+    linear-gradient(
+      90deg,
+      rgba(15, 23, 42, 0.92),
+      rgba(17, 30, 48, 0.78)
+    );
+
+  border: 1px solid rgba(96, 165, 250, 0.20);
+  border-radius: var(--radius-lg);
+
+  box-shadow: 0 8px 24px rgba(2, 6, 23, 0.20);
 }
 
 .system-status-copy {
   display: flex;
   align-items: center;
-  gap: 12px;
   flex-wrap: wrap;
+  gap: 11px;
 }
 
 .system-status-label {
-  color: #7dd3fc;
-  font-size: 0.72rem;
-  font-weight: 700;
+  color: var(--accent-cyan);
+
+  font-size: 0.68rem;
+  font-weight: 750;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.10em;
 }
 
 .system-status-copy strong {
-  font-size: 0.98rem;
+  color: #f8fafc;
+
+  font-size: 0.96rem;
+  font-weight: 700;
 }
 
 .system-status-detail {
-  color: #94a3b8;
-  font-size: 0.84rem;
+  color: var(--text-muted);
+
+  font-size: 0.82rem;
 }
 
-.panel-description {
-  margin: 4px 0 0;
-  color: #7f91aa;
-  font-size: 0.8rem;
+
+/* ============================================================
+   7. Error Banner
+   ============================================================ */
+
+.error-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  margin-top: 16px;
+  padding: 12px 14px;
+
+  color: #fecaca;
+
+  background: rgba(127, 29, 29, 0.20);
+
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-md);
+}
+
+
+/* ============================================================
+   8. Statistics Cards
+   ============================================================ */
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 15px;
+
+  margin-top: 18px;
+}
+
+.stat-card {
+  position: relative;
+
+  min-width: 0;
+
+  padding: 19px 20px;
+
+  overflow: hidden;
+
+  background:
+    linear-gradient(
+      145deg,
+      rgba(15, 23, 42, 0.96),
+      rgba(11, 22, 36, 0.90)
+    );
+
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+
+  box-shadow: 0 8px 24px rgba(2, 6, 23, 0.20);
+
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.stat-card::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+
+  width: 100%;
+  height: 2px;
+
+  content: "";
+
+  background: linear-gradient(
+    90deg,
+    rgba(96, 165, 250, 0.65),
+    rgba(125, 211, 252, 0.08)
+  );
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+
+  border-color: rgba(96, 165, 250, 0.30);
+
+  box-shadow: var(--shadow-panel);
+}
+
+.stat-label {
+  color: #a5b4cf;
+
+  font-size: 0.70rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+.stat-value {
+  margin-top: 9px;
+
+  color: #f8fafc;
+
+  font-size: clamp(1.8rem, 2.5vw, 2.35rem);
+  font-weight: 750;
+  line-height: 1.1;
+  letter-spacing: -0.045em;
+}
+
+.stat-hint {
+  margin-top: 8px;
+
+  color: var(--text-muted);
+
+  font-size: 0.78rem;
+}
+
+
+/* ============================================================
+   9. Summary Cards
+   ============================================================ */
+
+.summary-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 15px;
+
+  margin-top: 15px;
+}
+
+.summary-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+
+  min-width: 0;
+
+  padding: 15px 19px;
+
+  background: rgba(15, 23, 42, 0.78);
+
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.summary-card > div {
+  min-width: 0;
+}
+
+.summary-label {
+  display: block;
+
+  color: var(--text-secondary);
+
+  font-size: 0.84rem;
+  font-weight: 600;
 }
 
 .summary-card small {
   display: block;
-  margin-top: 4px;
-  color: #64748b;
-  font-size: 0.75rem;
+
+  margin-top: 3px;
+
+  overflow: hidden;
+
+  color: var(--text-dim);
+
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .summary-card > strong {
-  font-size: 1.35rem;
+  flex-shrink: 0;
+
+  color: #f8fafc;
+
+  font-size: 1.3rem;
+  font-weight: 750;
+}
+
+
+/* ============================================================
+   10. Main Content Layout
+   ============================================================ */
+
+.content-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) minmax(280px, 0.8fr);
+  gap: 17px;
+
+  margin-top: 17px;
+}
+
+
+/* ============================================================
+   11. Panels
+   ============================================================ */
+
+.panel {
+  min-width: 0;
+
+  padding: 19px 19px 10px;
+
+  background:
+    linear-gradient(
+      145deg,
+      rgba(15, 23, 42, 0.90),
+      rgba(9, 19, 31, 0.88)
+    );
+
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+
+  box-shadow: 0 8px 25px rgba(2, 6, 23, 0.20);
+}
+
+.panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 15px;
+
+  margin-bottom: 14px;
+}
+
+h2 {
+  margin: 0;
+
+  color: #f1f5f9;
+
+  font-size: 1.02rem;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+}
+
+.panel-description {
+  margin: 4px 0 0;
+
+  color: #7f91aa;
+
+  font-size: 0.76rem;
+}
+
+
+/* ============================================================
+   12. Table
+   ============================================================ */
+
+.table-wrapper {
+  width: 100%;
+
+  overflow-x: auto;
+
+  background: var(--bg-table);
+
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+
+  scrollbar-width: thin;
+}
+
+table {
+  width: 100%;
+  min-width: 760px;
+
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 11px 13px;
+
+  text-align: left;
+
+  border-bottom: 1px solid rgba(148, 163, 184, 0.10);
+}
+
+th {
+  color: #9fc6ff;
+
+  background: rgba(18, 30, 45, 0.94);
+
+  font-size: 0.68rem;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+td {
+  color: #edf3ff;
+
+  font-size: 0.82rem;
+}
+
+tbody tr {
+  transition: background 0.15s ease;
+}
+
+tbody tr:hover {
+  background: rgba(59, 130, 246, 0.06);
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+
+/* ============================================================
+   13. Status Rows
+   ============================================================ */
+
+.status-stack {
+  margin-top: 4px;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+
+  padding: 12px 0;
+
+  border-bottom: 1px solid rgba(148, 163, 184, 0.11);
+}
+
+.status-row:last-child {
+  border-bottom: none;
+}
+
+.status-row > span {
+  min-width: 0;
+
+  color: var(--text-secondary);
+
+  font-size: 0.82rem;
+}
+
+
+/* ============================================================
+   14. Status Badges
+   ============================================================ */
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  min-width: 88px;
+
+  padding: 5px 10px;
+
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+
+  font-size: 0.66rem;
+  font-weight: 750;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+
+  white-space: nowrap;
+}
+
+.status-success {
+  color: var(--success);
+
+  background: var(--success-bg);
+  border-color: var(--success-border);
+}
+
+.status-danger {
+  color: var(--danger);
+
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+}
+
+.status-warning {
+  color: var(--warning);
+
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+}
+
+.status-neutral {
+  color: var(--neutral);
+
+  background: var(--neutral-bg);
+  border-color: var(--neutral-border);
+}
+
+
+/* ============================================================
+   15. Loading State
+   ============================================================ */
+
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  min-height: 320px;
+
+  padding: 24px;
+
+  color: var(--text-primary);
+
+  text-align: center;
+
+  background:
+    radial-gradient(
+      circle at center,
+      rgba(59, 130, 246, 0.08),
+      transparent 55%
+    ),
+    rgba(15, 23, 42, 0.80);
+
+  border: 1px dashed var(--border-default);
+  border-radius: var(--radius-lg);
+}
+
+.loading-state strong {
+  display: block;
+
+  color: #f1f5f9;
+
+  font-size: 1rem;
+}
+
+.loading-state p {
+  margin: 6px 0 0;
+
+  color: var(--text-muted);
+
+  font-size: 0.8rem;
+}
+
+
+/* ============================================================
+   16. Empty State
+   ============================================================ */
+
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  min-height: 250px;
+
+  padding: 24px;
+
+  color: var(--text-primary);
+
+  text-align: center;
+
+  background: rgba(15, 23, 42, 0.58);
+
+  border: 1px dashed var(--border-default);
+  border-radius: var(--radius-md);
 }
 
 .empty-state strong {
   display: block;
+
   color: #e5edf8;
-  font-size: 0.95rem;
+
+  font-size: 0.92rem;
+  font-weight: 650;
 }
 
-.empty-state p,
-.loading-state p {
+.empty-state p {
   margin: 6px 0 0;
-  color: #94a3b8;
-  font-size: 0.82rem;
+
+  color: var(--text-muted);
+
+  font-size: 0.78rem;
 }
 
-@media (max-width: 560px) {
+
+/* ============================================================
+   17. Responsive — Tablet
+   ============================================================ */
+
+@media (max-width: 1000px) {
+  .app-shell {
+    padding: 22px;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .content-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-panel {
+    order: -1;
+  }
+}
+
+
+/* ============================================================
+   18. Responsive — Mobile
+   ============================================================ */
+
+@media (max-width: 700px) {
+  .app-shell {
+    padding: 16px;
+  }
+
+  .topbar {
+    flex-direction: column;
+
+    padding: 20px;
+  }
+
+  .header-meta {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .meta-card {
+    flex: 1;
+  }
+
   .system-status-bar {
     align-items: flex-start;
     flex-direction: column;
@@ -74,5 +833,56 @@
     align-items: flex-start;
     flex-direction: column;
     gap: 5px;
+  }
+
+  .summary-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* ============================================================
+   19. Responsive — Small Mobile
+   ============================================================ */
+
+@media (max-width: 480px) {
+  .app-shell {
+    padding: 12px;
+  }
+
+  h1 {
+    font-size: 1.75rem;
+  }
+
+  .subtitle {
+    font-size: 0.92rem;
+  }
+
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .stat-card {
+    padding: 17px;
+  }
+
+  .panel {
+    padding: 16px 14px 8px;
+  }
+
+  .panel-header {
+    align-items: flex-start;
+  }
+
+  .system-status-bar {
+    padding: 15px;
+  }
+
+  .summary-card {
+    padding: 14px 15px;
+  }
+
+  .status-row {
+    padding: 11px 0;
   }
 }
