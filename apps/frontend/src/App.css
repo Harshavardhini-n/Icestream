@@ -511,7 +511,6 @@ h1 {
 
   box-shadow: 0 8px 25px rgba(2, 6, 23, 0.20);
 }
-
 .panel-header {
   display: flex;
   align-items: flex-start;
@@ -539,12 +538,9 @@ h2 {
 
   font-size: 0.76rem;
 }
-
-
 /* ============================================================
    12. Table
    ============================================================ */
-
 .table-wrapper {
   width: 100%;
 
@@ -557,14 +553,12 @@ h2 {
 
   scrollbar-width: thin;
 }
-
 table {
   width: 100%;
   min-width: 760px;
 
   border-collapse: collapse;
 }
-
 th,
 td {
   padding: 11px 13px;
@@ -573,7 +567,6 @@ td {
 
   border-bottom: 1px solid rgba(148, 163, 184, 0.10);
 }
-
 th {
   color: #9fc6ff;
 
