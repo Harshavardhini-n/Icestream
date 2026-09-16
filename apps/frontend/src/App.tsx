@@ -3,6 +3,7 @@ import { getEvents, getHealth, getStatistics } from './api';
 import ConnectionStatus from './components/ConnectionStatus';
 import EventTable from './components/EventTable';
 import Header from './components/Header';
+import PipelineGraph from './components/PipelineGraph';
 import StatCard from './components/StatCard';
 import StatusBadge from './components/StatusBadge';
 import type { EventRecord, HealthStatus, Statistics } from './types';
@@ -25,16 +26,20 @@ function App() {
   const [statistics, setStatistics] =
     useState<Statistics>(initialStatistics);
 
-  const [events, setEvents] = useState<EventRecord[]>([]);
+  const [events, setEvents] =
+    useState<EventRecord[]>([]);
 
   const [health, setHealth] =
     useState<HealthStatus>(initialHealth);
 
-  const [apiConnected, setApiConnected] = useState(false);
+  const [apiConnected, setApiConnected] =
+    useState(false);
 
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] =
+    useState(true);
 
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] =
+    useState<string | null>(null);
 
   const [lastUpdated, setLastUpdated] =
     useState('Waiting for first refresh');
@@ -181,13 +186,22 @@ function App() {
           </strong>
 
           <span className="system-status-detail">
-            {health.details ?? 'Monitoring pipeline status'}
+            {health.details ??
+              'Monitoring pipeline status'}
           </span>
         </div>
 
         <StatusBadge
-          label={systemOperational ? 'OPERATIONAL' : 'DEGRADED'}
-          tone={systemOperational ? 'success' : 'warning'}
+          label={
+            systemOperational
+              ? 'OPERATIONAL'
+              : 'DEGRADED'
+          }
+          tone={
+            systemOperational
+              ? 'success'
+              : 'warning'
+          }
         />
       </section>
 
@@ -256,6 +270,37 @@ function App() {
         </div>
       </section>
 
+      <section className="panel pipeline-panel">
+        <div className="panel-header">
+          <div>
+            <h2>Pipeline Architecture</h2>
+
+            <p className="panel-description">
+              Real-time checkout data flow across the
+              IceStream platform
+            </p>
+          </div>
+
+          <StatusBadge
+            label={
+              health.kafka_connected
+                ? 'STREAMING'
+                : 'DEGRADED'
+            }
+            tone={
+              health.kafka_connected
+                ? 'success'
+                : 'danger'
+            }
+          />
+        </div>
+
+        <PipelineGraph
+          kafkaConnected={health.kafka_connected}
+          apiConnected={apiConnected}
+        />
+      </section>
+
       <main className="content-grid">
         <section className="panel">
           <div className="panel-header">
@@ -263,7 +308,8 @@ function App() {
               <h2>Recent Checkout Events</h2>
 
               <p className="panel-description">
-                Latest events received from the checkout stream
+                Latest events received from the checkout
+                stream
               </p>
             </div>
 
@@ -286,7 +332,10 @@ function App() {
           ) : (
             <div className="empty-state">
               <div>
-                <strong>No checkout events available</strong>
+                <strong>
+                  No checkout events available
+                </strong>
+
                 <p>
                   Events will appear here when the Kafka
                   consumer receives data.
