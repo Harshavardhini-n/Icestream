@@ -138,9 +138,36 @@ The following components are not yet implemented and remain future work:
 19. Real-time WebSocket updates
 20. End-to-end validation and hardening
 
+## Run
+
+Use Docker Compose to bring up local dependencies and then run the services locally.
+
+```powershell
+docker compose up -d
+cd backend
+python -m venv .venv; .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8000
+```
+
+In a second terminal:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`. Kafka is configured for `localhost:9092`.
+
+## External ingestion
+
+`POST /external-ingest` accepts either `{ "url": "https://..." }` (polled in the background) or `{ "data": {...} }`. Third parties can also post events directly to `POST /produce`.
+
+The app intentionally falls back to an in-process queue when Kafka is temporarily unavailable, so the dashboard remains demoable before Docker is ready.
+
 ## Local development prerequisites
 
-Before future implementation milestones, ensure the following are available:
 - Python 3.11+
 - Docker Desktop or Docker Engine
 - Docker Compose
