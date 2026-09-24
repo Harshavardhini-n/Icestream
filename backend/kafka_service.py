@@ -1,10 +1,15 @@
 """Kafka producer/consumer with a local-queue resilience fallback."""
 from __future__ import annotations
-import asyncio, json
+import asyncio, json, importlib
 from collections.abc import Awaitable, Callable
-try:
-    from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
-except ImportError:  # permits the in-process demo mode on unsupported Python builds
+
+# Import aiokafka dynamically to avoid static analysis/import-time errors when
+# the package is not installed (e.g. in lightweight demo environments).
+_aiokafka = importlib.import_module("aiokafka") if importlib.util.find_spec("aiokafka") else None
+if _aiokafka is not None:
+    AIOKafkaConsumer = getattr(_aiokafka, "AIOKafkaConsumer", None)
+    AIOKafkaProducer = getattr(_aiokafka, "AIOKafkaProducer", None)
+else:
     AIOKafkaConsumer = AIOKafkaProducer = None
 
 BOOTSTRAP_SERVERS = "localhost:9092"

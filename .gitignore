@@ -9,6 +9,9 @@ node_modules/
 dist/
 .next/
 
+# npm cache
+frontend/.npm-cache/
+
 .env
 
 .vscode/
