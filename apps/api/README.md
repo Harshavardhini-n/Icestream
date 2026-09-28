@@ -2,7 +2,7 @@
 
 ## What the API does
 
-This API is the first backend service for IceStream. It connects to Kafka, consumes messages from the real `checkout-events` topic, keeps a lightweight in-memory view of the latest events, and exposes REST endpoints for future frontend integration.
+This API connects to Kafka, consumes messages from the `checkout-events` topic, keeps a lightweight in-memory view of the latest events, and exposes REST endpoints plus WebSocket live updates for the dashboard.
 
 ## Architecture
 
@@ -11,10 +11,10 @@ Kafka
 Kafka Consumer
 ↓
 FastAPI Backend
-↓
-REST API
+├── REST API
+└── WebSocket live updates
 
-The API intentionally does not implement React, Flink, Iceberg, MinIO, DLQ handling, or remediation in this commit.
+The API does not implement stream processing, storage, DLQ handling, or remediation.
 
 ## Required environment variables
 
@@ -67,6 +67,28 @@ Open:
 - `GET /api/events/{event_id}` — specific event lookup
 - `GET /api/statistics` — stream statistics
 
+## WebSocket live updates
+
+Connect to `ws://localhost:8000/ws/events` to receive an initial snapshot and subsequent snapshots when the Kafka consumer observes an event or a meaningful statistics/health change. Every message uses this structure:
+
+```json
+{
+	"type": "snapshot",
+	"events": [],
+	"statistics": {
+		"total_events": 0,
+		"valid_events": 0,
+		"malformed_events": 0,
+		"consumer_errors": 0,
+		"events_in_memory": 0
+	},
+	"health": {
+		"status": "degraded",
+		"kafka_connected": false
+	}
+}
+```
+
 ## How to verify that Kafka events are reaching the API
 
 1. Start Kafka and confirm the topic exists.
@@ -90,9 +112,7 @@ The API should reflect actual Kafka messages flowing through the `checkout-event
 
 ## What is intentionally NOT implemented yet
 
-- React is not part of Commit 4.
-- Flink is not part of Commit 4.
-- Iceberg is not part of Commit 4.
-- DLQ/remediation are not part of Commit 4.
-- MinIO is not part of Commit 4.
-- This commit does not add frontend or streaming processing beyond the API consumer.
+- Flink stream processing
+- Iceberg table management
+- DLQ processing and remediation
+- MinIO object storage

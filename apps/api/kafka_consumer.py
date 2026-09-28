@@ -5,7 +5,7 @@ import logging
 import threading
 import time
 from collections import deque
-from typing import Any
+from typing import Any, Callable
 
 from kafka import KafkaConsumer
 from kafka.errors import KafkaError
@@ -31,6 +31,7 @@ class KafkaCheckoutConsumer:
         self._running = True
         self._thread: threading.Thread | None = None
         self._recent_events: deque[dict[str, Any]] = deque(maxlen=max_events_in_memory)
+        self._event_listeners: set[Callable[[], None]] = set()
         self._stats: dict[str, int] = {
             "total_events": 0,
             "valid_events": 0,
@@ -56,6 +57,29 @@ class KafkaCheckoutConsumer:
     def is_connected(self) -> bool:
         with self._lock:
             return self._connected
+
+    def add_event_listener(self, listener: Callable[[], None]) -> None:
+        with self._lock:
+            self._event_listeners.add(listener)
+
+    def remove_event_listener(self, listener: Callable[[], None]) -> None:
+        with self._lock:
+            self._event_listeners.discard(listener)
+
+    def _notify_event_listeners(self) -> None:
+        with self._lock:
+            listeners = tuple(self._event_listeners)
+        for listener in listeners:
+            try:
+                listener()
+            except Exception:  # pragma: no cover - listener failures are isolated
+                self._logger.exception("Kafka event listener failed")
+
+    def _record_malformed_event(self) -> None:
+        with self._lock:
+            self._stats["total_events"] += 1
+            self._stats["malformed_events"] += 1
+        self._notify_event_listeners()
 
     def get_recent_events(self, limit: int = 10) -> list[dict[str, Any]]:
         with self._lock:
@@ -90,8 +114,12 @@ class KafkaCheckoutConsumer:
 
     def _close_consumer(self) -> None:
         consumer = self._consumer
-        if consumer is None:
+        with self._lock:
+            was_connected = self._connected
             self._connected = False
+        if consumer is None:
+            if was_connected:
+                self._notify_event_listeners()
             return
         try:
             consumer.close()
@@ -99,7 +127,8 @@ class KafkaCheckoutConsumer:
             self._logger.warning("Kafka consumer close warning: %s", exc)
         finally:
             self._consumer = None
-            self._connected = False
+            if was_connected:
+                self._notify_event_listeners()
             self._logger.info("Kafka consumer closed")
 
     def _connect(self) -> bool:
@@ -113,20 +142,28 @@ class KafkaCheckoutConsumer:
                 enable_auto_commit=True,
                 value_deserializer=None,
             )
-            self._connected = True
+            with self._lock:
+                connection_changed = not self._connected
+                self._connected = True
+            if connection_changed:
+                self._notify_event_listeners()
             self._logger.info("Kafka connection successful for brokers=%s topic=%s", self.bootstrap_servers, self.topic)
             return True
         except KafkaError as exc:
             self._logger.warning("Kafka connection failed for brokers=%s topic=%s: %s", self.bootstrap_servers, self.topic, exc)
-            self._connected = False
-            self._stats["consumer_errors"] += 1
+            with self._lock:
+                self._connected = False
+                self._stats["consumer_errors"] += 1
             self._consumer = None
+            self._notify_event_listeners()
             return False
         except Exception as exc:  # pragma: no cover - defensive path
             self._logger.warning("Kafka connection unexpected error for brokers=%s topic=%s: %s", self.bootstrap_servers, self.topic, exc)
-            self._connected = False
-            self._stats["consumer_errors"] += 1
+            with self._lock:
+                self._connected = False
+                self._stats["consumer_errors"] += 1
             self._consumer = None
+            self._notify_event_listeners()
             return False
 
     def _consume_loop(self) -> None:
@@ -141,21 +178,23 @@ class KafkaCheckoutConsumer:
                     for record in message:
                         self._process_message(record.value)
             except KafkaError as exc:
-                self._stats["consumer_errors"] += 1
+                with self._lock:
+                    self._stats["consumer_errors"] += 1
+                self._notify_event_listeners()
                 self._logger.warning("Kafka consumer error: %s", exc)
                 self._close_consumer()
                 time.sleep(5)
             except Exception as exc:  # pragma: no cover - defensive path
-                self._stats["consumer_errors"] += 1
+                with self._lock:
+                    self._stats["consumer_errors"] += 1
+                self._notify_event_listeners()
                 self._logger.exception("Unexpected Kafka consumer failure: %s", exc)
                 self._close_consumer()
                 time.sleep(5)
 
     def _process_message(self, raw_message: Any) -> None:
         if raw_message is None:
-            with self._lock:
-                self._stats["total_events"] += 1
-                self._stats["malformed_events"] += 1
+            self._record_malformed_event()
             self._logger.warning("Malformed Kafka message received: empty payload")
             return
 
@@ -166,16 +205,12 @@ class KafkaCheckoutConsumer:
                 payload = str(raw_message)
             event = json.loads(payload)
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            with self._lock:
-                self._stats["total_events"] += 1
-                self._stats["malformed_events"] += 1
+            self._record_malformed_event()
             self._logger.warning("Malformed Kafka event received: %s", exc)
             return
 
         if not isinstance(event, dict):
-            with self._lock:
-                self._stats["total_events"] += 1
-                self._stats["malformed_events"] += 1
+            self._record_malformed_event()
             self._logger.warning("Kafka event payload is not a JSON object: %s", type(event).__name__)
             return
 
@@ -184,4 +219,5 @@ class KafkaCheckoutConsumer:
             self._stats["valid_events"] += 1
             self._recent_events.append(dict(event))
 
+        self._notify_event_listeners()
         self._logger.info("Kafka event received: event_id=%s", event.get("event_id", "unknown"))

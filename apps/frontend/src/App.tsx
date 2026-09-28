@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getEvents, getHealth, getStatistics } from './api';
+import { connectToLiveUpdates } from './websocket';
 import ConnectionStatus from './components/ConnectionStatus';
 import EventTable from './components/EventTable';
 import Header from './components/Header';
@@ -33,6 +34,9 @@ function App() {
     useState<HealthStatus>(initialHealth);
 
   const [apiConnected, setApiConnected] =
+    useState(false);
+
+  const [liveUpdatesConnected, setLiveUpdatesConnected] =
     useState(false);
 
   const [loading, setLoading] =
@@ -122,6 +126,24 @@ function App() {
       window.clearInterval(healthTimer);
       window.clearInterval(metricsTimer);
     };
+  }, []);
+
+  useEffect(() => {
+    return connectToLiveUpdates(
+      (message) => {
+        setEvents(message.events);
+        setStatistics(message.statistics);
+        setHealth(message.health);
+        setLastUpdated(
+          new Date().toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          }),
+        );
+      },
+      setLiveUpdatesConnected,
+    );
   }, []);
 
   const overviewCards = useMemo(
@@ -368,6 +390,23 @@ function App() {
               connected={apiConnected}
               healthyLabel="HEALTHY"
             />
+
+            <div className="status-row">
+              <span>Live updates</span>
+
+              <StatusBadge
+                label={
+                  liveUpdatesConnected
+                    ? 'CONNECTED'
+                    : 'POLLING'
+                }
+                tone={
+                  liveUpdatesConnected
+                    ? 'success'
+                    : 'warning'
+                }
+              />
+            </div>
 
             <div className="status-row">
               <span>Events in memory</span>

@@ -30,3 +30,10 @@ export type Statistics = {
   consumer_errors: number;
   events_in_memory: number;
 };
+
+export type LiveUpdateMessage = {
+  type: 'snapshot';
+  events: EventRecord[];
+  statistics: Statistics;
+  health: HealthStatus;
+};
