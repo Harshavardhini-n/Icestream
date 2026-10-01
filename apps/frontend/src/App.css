@@ -942,18 +942,15 @@ tbody tr:last-child td {
   color: #e8eef7;
   fill: #e8eef7;
 }
-
 .pipeline-graph .react-flow__controls-button:last-child {
   border-bottom: none;
 }
-
 .pipeline-graph .react-flow__minimap {
   overflow: hidden;
   border: 1px solid #33445c;
   border-radius: 10px;
   background: #0d1a2b;
 }
-
 .pipeline-graph .react-flow__attribution {
   display: none;
 }
